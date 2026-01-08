@@ -50,32 +50,25 @@ app.listen(PORT, () => {
 
 import admin from "firebase-admin"; // ← якщо ще не імпортований
 
-app.get("/internal/test-topic/:uid", async (req, res) => {
-  const uid = req.params.uid;
+app.get("/internal/test-topic/:level/:uid", async (req, res) => {
+  const level = String(req.params.level); // "raion" або "oblast"
+  const uid = String(req.params.uid);     // "150" або "24"
+
+  if (level !== "raion" && level !== "oblast") {
+    return res.status(400).json({ ok: false, error: "level must be raion|oblast" });
+  }
 
   try {
     const msgId = await admin.messaging().send({
-      topic: `raion_${uid}`,
-      notification: {
-        title: "TEST",
-        body: `topic raion_${uid}`,
-      },
-      data: {
-        type: "TEST",
-        raion_uid: uid,
-      },
-      android: {
-        priority: "high",
-      },
+      topic: `${level}_${uid}`, // ✅ raion_150 або oblast_24
+      notification: { title: "TEST", body: `topic ${level}_${uid}` },
+      data: { type: "TEST", level, uid },
+      android: { priority: "high" },
     });
 
-    res.json({ ok: true, msgId });
+    res.json({ ok: true, msgId, topic: `${level}_${uid}` });
   } catch (e: any) {
-    console.error("❌ test-topic error:", e);
-    res.status(500).json({
-      ok: false,
-      error: String(e?.message ?? e),
-    });
+    res.status(500).json({ ok: false, error: String(e?.message ?? e) });
   }
 });
 
