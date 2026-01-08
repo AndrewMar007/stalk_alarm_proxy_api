@@ -9,10 +9,12 @@ type State = { raions: Record<string, string>; oblasts: Record<string, string> }
 export function startPushPoller() {
   const SERVICE_ACCOUNT_PATH =
     process.env.FCM_SERVICE_ACCOUNT || "./serviceAccountKey.json";
+  const PORT = Number(process.env.PORT || 3000);
 
   // має повертати JSON з { alerts: [...] } або просто [...] — обидва варіанти ок
   const PROXY_URL =
-    process.env.ALERTS_PROXY_URL || "http://localhost:3000/internal/alerts/active";
+    process.env.ALERTS_PROXY_URL ||
+    `http://127.0.0.1:${PORT}/internal/alerts/active`;
 
   const POLL_MS = Number(process.env.POLL_MS || 15000);
   const STATE_FILE = process.env.STATE_FILE || "./alarm_state.json";
