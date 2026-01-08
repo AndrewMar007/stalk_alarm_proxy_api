@@ -1,0 +1,21 @@
+# Node
+node_modules/
+
+# Build
+dist/
+
+# Env
+.env
+serviceAccountKey.json
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS
+.DS_Store
+
+# IDE
+.vscode/
+
