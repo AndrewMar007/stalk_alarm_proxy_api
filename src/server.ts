@@ -61,7 +61,7 @@ app.get("/internal/test-topic/:level/:uid", async (req, res) => {
   try {
     const msgId = await admin.messaging().send({
       topic: `${level}_${uid}`, // ✅ raion_150 або oblast_24
-      notification: { title: "TEST", body: `topic ${level}_${uid}` },
+      //notification: { title: "TEST", body: `topic ${level}_${uid}` },
       data: { type: "TEST", level, uid },
       android: { priority: "high" },
     });
