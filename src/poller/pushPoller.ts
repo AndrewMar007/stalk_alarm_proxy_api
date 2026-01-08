@@ -44,7 +44,10 @@ export function startPushPoller() {
 
   /* ================= EXTRACT ================= */
 
-  function extractActiveMaps(payload: any): { raions: UidNameMap; oblasts: UidNameMap } {
+  function extractActiveMaps(payload: any): {
+    raions: UidNameMap;
+    oblasts: UidNameMap;
+  } {
     const alerts = payload?.alerts ?? payload;
 
     const raions = new Map<string, string>();
@@ -53,29 +56,32 @@ export function startPushPoller() {
     if (!Array.isArray(alerts)) return { raions, oblasts };
 
     for (const a of alerts) {
-      const type = a?.location_type;
-      const title = a?.location_title;
-      if (!title) continue;
-
-      // ✅ РАЙОН: topic raion_{uid}
-      if (type === "raion") {
-        const uid = a?.location_uid; // 150,152,...
-        if (uid != null) raions.set(String(uid), String(title));
-        continue;
+      // 1) ОБЛАСТЬ вважаємо активною, якщо в ній є будь-який алерт (raion/hromada/city/oblast)
+      //    У всіх твоїх прикладах це є:
+      //      location_oblast_uid: <number>
+      //      location_oblast: "<назва області>"
+      const oblastUid = a?.location_oblast_uid;
+      const oblastName = a?.location_oblast;
+      if (oblastUid != null && oblastName) {
+        oblasts.set(String(oblastUid), String(oblastName));
       }
 
-      // ✅ ОБЛАСТЬ: topic oblast_{uid}
-      if (type === "oblast") {
-        const uid = a?.location_oblast_uid ?? a?.location_uid; // 24,16,...
-        if (uid != null) oblasts.set(String(uid), String(title));
-        continue;
+      // 2) РАЙОН активний тільки якщо алерт саме типу "raion"
+      //    (бо для city/hromada у відповіді немає raion_uid)
+      const type = a?.location_type;
+      if (type === "raion") {
+        const uid = a?.location_uid; // "150","152",...
+        const title = a?.location_title; // "Звенигородський район"
+        if (uid != null && title) {
+          raions.set(String(uid), String(title));
+        }
       }
     }
 
     return { raions, oblasts };
   }
 
-  /* ================= PUSH ================= */
+  /* ================= PUSH (DATA-ONLY) ================= */
 
   async function sendToTopic(
     level: "raion" | "oblast",
@@ -84,32 +90,28 @@ export function startPushPoller() {
     type: "ALARM_START" | "ALARM_END"
   ) {
     const isStart = type === "ALARM_START";
+
+    // ✅ Текст формуємо на сервері (можеш змінити під свій стиль)
     const title = "Stalk Alarm";
-
     const body = isStart
-      ? `Увага! Починається викид в «${name}»! Пройдіть в найближче укриття!`
-      : `Викид завершився в «${name}». Слідкуйте за оновленнями!`;
+      ? `Увага! Повітряна тривога в «${name}»! Залишайтесь в укритті!`
+      : `Відбій у «${name}». Будьте обережні!`;
 
+    // ✅ ВАЖЛИВО: ТІЛЬКИ data (без notification), щоб не було дублю і щоб звук робив FLN
     await admin.messaging().send({
       topic: `${level}_${uid}`,
-
-      // ✅ видно в шторці навіть коли app killed
-      notification: { title, body },
-
-      // ✅ для внутрішньої логіки в апці
       data: {
-        type,
-        level,
-        uid,
-        name,
+        // для твого Flutter
+        type,           // ALARM_START | ALARM_END
+        level,          // raion | oblast
+        uid,            // "150" або "24"
+        name,           // "Звенигородський район" або "Черкаська область"
+        // щоб показувати без мапінгу в апці:
+        title,
+        body,
       },
-
       android: {
         priority: "high",
-        notification: {
-          channelId: "alarm_channel",
-          sound: "alarm",
-        },
       },
     });
   }
@@ -162,12 +164,8 @@ export function startPushPoller() {
   /* ================= INIT ================= */
 
   if (admin.apps.length === 0) {
-    const sa = JSON.parse(
-      fs.readFileSync(path.resolve(SERVICE_ACCOUNT_PATH), "utf8")
-    );
-    admin.initializeApp({
-      credential: admin.credential.cert(sa),
-    });
+    const sa = JSON.parse(fs.readFileSync(path.resolve(SERVICE_ACCOUNT_PATH), "utf8"));
+    admin.initializeApp({ credential: admin.credential.cert(sa) });
   }
 
   console.log("🚀 Push poller started");
@@ -188,7 +186,6 @@ export function startPushPoller() {
     }
   };
 
-  // перший запуск одразу
   void tick();
   setInterval(() => void tick(), POLL_MS);
 }
