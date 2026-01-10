@@ -44,42 +44,89 @@ export function startPushPoller() {
 
   /* ================= EXTRACT ================= */
 
+  // function extractActiveMaps(payload: any): {
+  //   raions: UidNameMap;
+  //   oblasts: UidNameMap;
+  // } {
+  //   const alerts = payload?.alerts ?? payload;
+
+  //   const raions = new Map<string, string>();
+  //   const oblasts = new Map<string, string>();
+
+  //   if (!Array.isArray(alerts)) return { raions, oblasts };
+
+  //   for (const a of alerts) {
+  //     // 1) ОБЛАСТЬ вважаємо активною, якщо в ній є будь-який алерт (raion/hromada/city/oblast)
+  //     //    У всіх твоїх прикладах це є:
+  //     //      location_oblast_uid: <number>
+  //     //      location_oblast: "<назва області>"
+  //     const oblastUid = a?.location_oblast_uid;
+  //     const oblastName = a?.location_oblast;
+  //     if (oblastUid != null && oblastName) {
+  //       oblasts.set(String(oblastUid), String(oblastName));
+  //     }
+
+  //     // 2) РАЙОН активний тільки якщо алерт саме типу "raion"
+  //     //    (бо для city/hromada у відповіді немає raion_uid)
+  //     const type = a?.location_type;
+  //     if (type === "raion") {
+  //       const uid = a?.location_uid; // "150","152",...
+  //       const title = a?.location_title; // "Звенигородський район"
+  //       if (uid != null && title) {
+  //         raions.set(String(uid), String(title));
+  //       }
+  //     }
+  //   }
+
+  //   return { raions, oblasts };
+  // }
+
   function extractActiveMaps(payload: any): {
-    raions: UidNameMap;
-    oblasts: UidNameMap;
-  } {
-    const alerts = payload?.alerts ?? payload;
+  raions: UidNameMap;
+  oblasts: UidNameMap;
+} {
+  const alerts = payload?.alerts ?? payload;
 
-    const raions = new Map<string, string>();
-    const oblasts = new Map<string, string>();
+  const raions = new Map<string, string>();
+  const oblasts = new Map<string, string>();
 
-    if (!Array.isArray(alerts)) return { raions, oblasts };
+  if (!Array.isArray(alerts)) return { raions, oblasts };
 
-    for (const a of alerts) {
-      // 1) ОБЛАСТЬ вважаємо активною, якщо в ній є будь-який алерт (raion/hromada/city/oblast)
-      //    У всіх твоїх прикладах це є:
-      //      location_oblast_uid: <number>
-      //      location_oblast: "<назва області>"
-      const oblastUid = a?.location_oblast_uid;
-      const oblastName = a?.location_oblast;
-      if (oblastUid != null && oblastName) {
-        oblasts.set(String(oblastUid), String(oblastName));
+  for (const a of alerts) {
+    // ✅ беремо тільки активні
+    if (a?.finished_at != null) continue;
+
+    const type = a?.location_type;
+
+    // ✅ ОБЛАСТЬ: тільки якщо тип = "oblast"
+    if (type === "oblast") {
+      // у oblast-записів uid може бути в location_uid або location_oblast_uid (залежить від API)
+      const uid = a?.location_uid ?? a?.location_oblast_uid;
+      const title = a?.location_title ?? a?.location_oblast;
+
+      if (uid != null && title) {
+        oblasts.set(String(uid), String(title));
       }
-
-      // 2) РАЙОН активний тільки якщо алерт саме типу "raion"
-      //    (бо для city/hromada у відповіді немає raion_uid)
-      const type = a?.location_type;
-      if (type === "raion") {
-        const uid = a?.location_uid; // "150","152",...
-        const title = a?.location_title; // "Звенигородський район"
-        if (uid != null && title) {
-          raions.set(String(uid), String(title));
-        }
-      }
+      continue;
     }
 
-    return { raions, oblasts };
+    // ✅ РАЙОН: тільки якщо тип = "raion"
+    if (type === "raion") {
+      const uid = a?.location_uid;        // 150, 152, ...
+      const title = a?.location_title;    // "Звенигородський район"
+
+      if (uid != null && title) {
+        raions.set(String(uid), String(title));
+      }
+      continue;
+    }
+
+    // city/hromada/інші типи — ігноруємо (бо ти пушиш тільки по oblast/raion)
   }
+
+  return { raions, oblasts };
+}
+
 
   /* ================= PUSH (DATA-ONLY) ================= */
 
