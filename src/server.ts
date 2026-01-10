@@ -72,6 +72,51 @@ app.get("/internal/test-topic/:level/:uid", async (req, res) => {
   }
 });
 
+app.get("/internal/test-start/:topic", async (req, res) => {
+  try {
+    const topic = req.params.topic; // наприклад: raion_150 або oblast_24
+
+    const msgId = await admin.messaging().send({
+      topic,
+      data: {
+        type: "ALARM_START",
+        level: topic.startsWith("oblast_") ? "oblast" : "raion",
+        uid: topic.split("_")[1] ?? "",
+        name: topic,
+        title: "Stalk Alarm",
+        body: `TEST START for ${topic}`,
+      },
+      android: { priority: "high" },
+    });
+
+    res.json({ ok: true, msgId });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: String(e?.message ?? e) });
+  }
+});
+
+app.get("/internal/test-end/:topic", async (req, res) => {
+  try {
+    const topic = req.params.topic;
+
+    const msgId = await admin.messaging().send({
+      topic,
+      data: {
+        type: "ALARM_END",
+        level: topic.startsWith("oblast_") ? "oblast" : "raion",
+        uid: topic.split("_")[1] ?? "",
+        name: topic,
+        title: "Stalk Alarm",
+        body: `TEST END for ${topic}`,
+      },
+      android: { priority: "high" },
+    });
+
+    res.json({ ok: true, msgId });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: String(e?.message ?? e) });
+  }
+});
 
 app.get("/internal/test-oblast/:uid", async (req, res) => {
   const uid = req.params.uid; // сюди передаєш "31"
