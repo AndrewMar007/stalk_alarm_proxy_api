@@ -133,5 +133,24 @@ app.get("/internal/test-oblast/:uid", async (req, res) => {
   }
 });
 
+app.post("/internal/test_topic", async (req, res) => {
+  const { topic } = req.body; // наприклад "oblast_14"
+
+  await admin.messaging().send({
+    topic,
+    data: {
+      type: "ALARM_START",
+      level: "oblast",
+      uid: topic,
+      name: "TEST OBLAST",
+      title: "Stalk Alarm",
+      body: `TEST: push to ${topic}`,
+    },
+    android: { priority: "high" },
+  });
+
+  res.json({ ok: true, topic });
+});
+
 
 
