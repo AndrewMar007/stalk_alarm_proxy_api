@@ -595,6 +595,9 @@ export function startPushPoller() {
   });
 
   console.log(`[FCM] ${type} -> ${topic} (${name})`);
+  console.log(
+    `[FCM SEND] type=${type} level=${level} topic=${topic} name="${name}"`
+  );
 }
 
 
