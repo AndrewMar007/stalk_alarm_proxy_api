@@ -152,5 +152,15 @@ app.post("/internal/test_topic", async (req, res) => {
   res.json({ ok: true, topic });
 });
 
+import fs from "node:fs";
 
+app.get("/internal/debug/state", (_req, res) => {
+  const STATE_FILE = process.env.STATE_FILE || "./alarm_state.json";
 
+  try {
+    const raw = fs.readFileSync(STATE_FILE, "utf8");
+    res.type("application/json").send(raw);
+  } catch {
+    res.status(404).json({ error: "state file not found", path: STATE_FILE });
+  }
+});
