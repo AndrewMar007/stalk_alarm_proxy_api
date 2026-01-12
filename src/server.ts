@@ -134,23 +134,34 @@ app.get("/internal/test-oblast/:uid", async (req, res) => {
 });
 
 app.post("/internal/test_topic", async (req, res) => {
-  const { topic } = req.body; // наприклад "oblast_14"
+  const topic = String(req.body?.topic ?? "").trim();
+  const type = String(req.body?.type ?? "ALARM_START").trim(); // <-- БЕРЕМО З BODY
 
-  await admin.messaging().send({
-    topic,
-    data: {
-      type: "ALARM_START",
-      level: "oblast",
-      uid: topic,
-      name: "TEST OBLAST",
-      title: "Stalk Alarm",
-      body: `TEST: push to ${topic}`,
-    },
-    android: { priority: "high" },
-  });
+  if (!topic) return res.status(400).json({ ok: false, error: "topic required" });
+  if (type !== "ALARM_START" && type !== "ALARM_END") {
+    return res.status(400).json({ ok: false, error: "type must be ALARM_START|ALARM_END" });
+  }
 
-  res.json({ ok: true, topic });
+  try {
+    const msgId = await admin.messaging().send({
+      topic,
+      data: {
+        type, // <-- НЕ ПЕРЕЗАТИРАЄМО
+        level: topic.startsWith("oblast_") ? "oblast" : "raion",
+        uid: topic,
+        name: "TEST OBLAST",
+        title: "Stalk Alarm",
+        body: `TEST: ${type} to ${topic}`,
+      },
+      android: { priority: "high" },
+    });
+
+    res.json({ ok: true, msgId, topic, type });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: String(e?.message ?? e) });
+  }
 });
+
 
 import fs from "node:fs";
 
