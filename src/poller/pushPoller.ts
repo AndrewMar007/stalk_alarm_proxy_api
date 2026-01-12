@@ -28,7 +28,7 @@ export function startPushPoller() {
 
   // ✅ файл-мапа "назва області" -> "oblast_XX"
   const OBLAST_TOPICS_FILE =
-    process.env.OBLAST_TOPICS_FILE || "./oblast_topics.json";
+    process.env.OBLAST_TOPICS_FILE || "./oblast_uid_map.json";
 
   /* ================= OBLAST TOPICS MAP ================= */
 
