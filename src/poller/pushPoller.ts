@@ -3,13 +3,11 @@ import { fetch } from "undici";
 import fs from "node:fs";
 import path from "node:path";
 
-type TopicNameMap = Map<string, string>; // topic -> human name
-type State = { topics: Record<string, string> };
+type TopicNameMap = Map<string, string>; // topic -> name
+type State = { raions: Record<string, string>; oblasts: Record<string, string> };
 
 type OblastTopicRow = { name: string; topic: string };
-
 type AlarmType = "ALARM_START" | "ALARM_END";
-type Level = "raion" | "oblast";
 
 export function startPushPoller() {
   const SERVICE_ACCOUNT_PATH =
@@ -21,8 +19,6 @@ export function startPushPoller() {
     `http://127.0.0.1:${PORT}/internal/alerts/active`;
 
   const POLL_MS = Number(process.env.POLL_MS || 15000);
-
-  // ✅ один state файл, зберігаємо ТОПІКИ які зараз "активні"
   const STATE_FILE = process.env.STATE_FILE || "./alarm_state.json";
 
   // ✅ антифліккер END області: 2 тики = ~30с
@@ -30,26 +26,22 @@ export function startPushPoller() {
     process.env.OBLAST_END_CONFIRM_TICKS || 2
   );
 
-  // ✅ файл з твоїм мапінгом "назва області" -> "oblast_XX"
+  // ✅ файл-мапа "назва області" -> "oblast_XX"
   const OBLAST_TOPICS_FILE =
-    process.env.OBLAST_TOPICS_FILE || "./oblast_uid_map.json";
+    process.env.OBLAST_TOPICS_FILE || "./oblast_topics.json";
 
-  /* ================== INIT FCM ================== */
-  if (admin.apps.length === 0) {
-    const sa = JSON.parse(
-      fs.readFileSync(path.resolve(SERVICE_ACCOUNT_PATH), "utf8")
-    );
-    admin.initializeApp({ credential: admin.credential.cert(sa) });
-  }
+  /* ================= OBLAST TOPICS MAP ================= */
 
-  /* ================== LOAD OBLAST TOPICS ================== */
   function loadOblastNameToTopic(): Map<string, string> {
     try {
-      const raw = JSON.parse(fs.readFileSync(OBLAST_TOPICS_FILE, "utf8")) as OblastTopicRow[];
+      const raw = JSON.parse(
+        fs.readFileSync(OBLAST_TOPICS_FILE, "utf8")
+      ) as OblastTopicRow[];
+
       const m = new Map<string, string>();
       for (const r of raw) {
-        const name = String(r?.name ?? "").trim();
-        const topic = String(r?.topic ?? "").trim();
+        const name = (r?.name ?? "").toString().trim();
+        const topic = (r?.topic ?? "").toString().trim();
         if (!name || !topic) continue;
         m.set(name, topic);
       }
@@ -63,71 +55,78 @@ export function startPushPoller() {
 
   const oblastNameToTopic = loadOblastNameToTopic();
 
-  /* ================== STATE ================== */
-  function loadState(): TopicNameMap {
+  /* ================= STATE ================= */
+
+  function loadState(): { raions: TopicNameMap; oblasts: TopicNameMap } {
     try {
       const raw = JSON.parse(fs.readFileSync(STATE_FILE, "utf8")) as State;
-      return new Map(Object.entries(raw?.topics ?? {}));
+      return {
+        raions: new Map(Object.entries(raw?.raions ?? {})),
+        oblasts: new Map(Object.entries(raw?.oblasts ?? {})),
+      };
     } catch {
-      return new Map();
+      return { raions: new Map(), oblasts: new Map() };
     }
   }
 
-  function saveState(activeTopics: TopicNameMap) {
-    const obj: State = { topics: Object.fromEntries(activeTopics) };
+  function saveState(raions: TopicNameMap, oblasts: TopicNameMap) {
+    const obj: State = {
+      raions: Object.fromEntries(raions),
+      oblasts: Object.fromEntries(oblasts),
+    };
     fs.writeFileSync(STATE_FILE, JSON.stringify(obj, null, 2), "utf8");
   }
 
-  /* ================== EXTRACT ==================
-     - oblast активна якщо Є ХОЧА Б ОДИН активний алерт з location_oblast = ця область
-     - raion активний тільки якщо type === "raion"
-     - Повертаємо топіки, які треба вважати активними зараз
-  */
+  /* ================= EXTRACT ================= */
+
   function extractActiveTopics(payload: any): {
-    raionTopics: TopicNameMap;  // topic -> name
-    oblastTopics: TopicNameMap; // topic -> oblast name
+    raions: TopicNameMap;   // topic -> name
+    oblasts: TopicNameMap;  // topic -> name
   } {
     const alerts = payload?.alerts ?? payload;
 
-    const raionTopics = new Map<string, string>();
-    const oblastTopics = new Map<string, string>();
+    const raions = new Map<string, string>();
+    const oblasts = new Map<string, string>();
 
-    if (!Array.isArray(alerts)) return { raionTopics, oblastTopics };
+    if (!Array.isArray(alerts)) return { raions, oblasts };
 
     for (const a of alerts) {
       // ✅ тільки активні
       if (a?.finished_at != null) continue;
 
-      // ====== ОБЛАСТЬ: OR по всіх алертах ======
-      // беремо назву області з location_oblast (у твоєму JSON вона є всюди)
+      // ===== OBLAST =====
+      // область активна, якщо є хоч 1 алерт у цій області (будь-який location_type)
       const oblastName = (a?.location_oblast ?? "").toString().trim();
       if (oblastName) {
         const oblastTopic = oblastNameToTopic.get(oblastName);
         if (oblastTopic) {
-          // в області є хоча б 1 активний алерт -> область активна
-          oblastTopics.set(oblastTopic, oblastName);
+          oblasts.set(oblastTopic, oblastName);
+        } else {
+          // якщо десь не збіглась назва — побачиш це в логах
+          console.log(`[OBLAST MAP MISS] "${oblastName}" has no topic in ${OBLAST_TOPICS_FILE}`);
         }
       }
 
-      // ====== РАЙОН: тільки type=raion ======
+      // ===== RAION =====
+      // район активний тільки якщо type === raion
       if (a?.location_type === "raion") {
         const raionUid = (a?.location_uid ?? "").toString().trim();
         const raionName = (a?.location_title ?? "").toString().trim();
         if (raionUid && raionName) {
-          // твої підписки виглядають як raion_74
           const raionTopic = `raion_${raionUid}`;
-          raionTopics.set(raionTopic, raionName);
+          raions.set(raionTopic, raionName);
         }
       }
     }
 
-    return { raionTopics, oblastTopics };
+    return { raions, oblasts };
   }
 
-  /* ================== PUSH (DATA ONLY) ================== */
+  /* ================= PUSH ================= */
+
   async function sendToTopic(
-    level: Level,
-    topic: string,
+    level: "raion" | "oblast",
+    topic: string, // ✅ СЮДИ ПРИХОДИТЬ ВЖЕ ГОТОВИЙ topic: "oblast_14" або "raion_74"
     name: string,
     type: AlarmType
   ) {
@@ -143,7 +142,7 @@ export function startPushPoller() {
       data: {
         type,
         level,
-        uid: topic,     // для сумісності з твоїм Flutter (ти uid читаєш як string)
+        uid: topic, // щоб у Flutter було видно як ти підписувався
         name,
         title,
         body,
@@ -154,79 +153,87 @@ export function startPushPoller() {
     console.log(`[FCM SEND] type=${type} level=${level} topic=${topic} name="${name}"`);
   }
 
-  /* ================== POLL ================== */
-  const oblastMissStreak = new Map<string, number>(); // topic -> misses count
+  /* ================= POLL ================= */
 
-  async function pollOnce(prevActiveTopics: TopicNameMap) {
+  // ✅ streak відсутності області (антифліккер END)
+  const oblastMissStreak = new Map<string, number>();
+
+  async function pollOnce(prevRaions: TopicNameMap, prevOblastsStable: TopicNameMap) {
     const res = await fetch(PROXY_URL, { headers: { Accept: "application/json" } });
     if (!res.ok) throw new Error(`Upstream error: ${res.status} ${res.statusText}`);
 
     const payload = await res.json();
-    const { raionTopics, oblastTopics } = extractActiveTopics(payload);
+    const { raions: currentRaions, oblasts: oblastsInstant } = extractActiveTopics(payload);
 
-    // current set = raions + oblasts
-    const currentActive = new Map<string, string>([
-      ...raionTopics.entries(),
-      ...oblastTopics.entries(),
-    ]);
+    /* ===== RAIONS (без debounce) ===== */
 
-    /* ===== START ===== */
-    for (const [topic, name] of currentActive) {
-      if (!prevActiveTopics.has(topic)) {
-        const level: Level = topic.startsWith("oblast_") ? "oblast" : "raion";
-        await sendToTopic(level, topic, name, "ALARM_START");
+    for (const [topic, name] of currentRaions) {
+      if (!prevRaions.has(topic)) {
+        const t: AlarmType = "ALARM_START";
+        await sendToTopic("raion", topic, name, t);
+      }
+    }
+    for (const [topic, name] of prevRaions) {
+      if (!currentRaions.has(topic)) {
+        const t: AlarmType = "ALARM_END";
+        await sendToTopic("raion", topic, name, t);
       }
     }
 
-    /* ===== END =====
-       - raion: одразу END
-       - oblast: END тільки якщо область ВЖЕ 0 активних алертів (тобто topic зник),
-                і зник N тиками підряд (антифліккер)
-    */
-    for (const [topic, name] of Array.from(prevActiveTopics.entries())) {
-      if (currentActive.has(topic)) {
-        // якщо знов активний — скидаємо streak
-        if (topic.startsWith("oblast_")) oblastMissStreak.delete(topic);
-        continue;
+    /* ===== OBLASTS (stable + debounce END) ===== */
+
+    // START
+    for (const [topic, name] of oblastsInstant) {
+      oblastMissStreak.delete(topic);
+
+      if (!prevOblastsStable.has(topic)) {
+        prevOblastsStable.set(topic, name);
+        const t: AlarmType = "ALARM_START";
+        await sendToTopic("oblast", topic, name, t);
+      } else {
+        prevOblastsStable.set(topic, name);
       }
+    }
 
-      const isOblast = topic.startsWith("oblast_");
+    // END лише після N тика(ів) відсутності
+    for (const [topic, name] of Array.from(prevOblastsStable.entries())) {
+      if (oblastsInstant.has(topic)) continue;
 
-      if (!isOblast) {
-        // raion end одразу
-        await sendToTopic("raion", topic, name, "ALARM_END");
-        prevActiveTopics.delete(topic);
-        continue;
-      }
-
-      // oblast end з підтвердженням
       const streak = (oblastMissStreak.get(topic) ?? 0) + 1;
       oblastMissStreak.set(topic, streak);
 
       if (streak >= OBLAST_END_CONFIRM_TICKS) {
-        await sendToTopic("oblast", topic, name, "ALARM_END");
-        prevActiveTopics.delete(topic);
+        const t: AlarmType = "ALARM_END";
+        await sendToTopic("oblast", topic, name, t);
+        prevOblastsStable.delete(topic);
         oblastMissStreak.delete(topic);
       }
     }
 
-    return currentActive;
+    return { currentRaions };
   }
 
-  /* ================== RUN ================== */
+  /* ================= INIT ================= */
+
+  if (admin.apps.length === 0) {
+    const sa = JSON.parse(fs.readFileSync(path.resolve(SERVICE_ACCOUNT_PATH), "utf8"));
+    admin.initializeApp({ credential: admin.credential.cert(sa) });
+  }
+
   console.log("🚀 Push poller started");
   console.log(`POLL_MS=${POLL_MS}`);
   console.log(`PROXY_URL=${PROXY_URL}`);
   console.log(`STATE_FILE=${STATE_FILE}`);
-  console.log(`OBLAST_TOPICS_FILE=${OBLAST_TOPICS_FILE}`);
   console.log(`OBLAST_END_CONFIRM_TICKS=${OBLAST_END_CONFIRM_TICKS}`);
+  console.log(`OBLAST_TOPICS_FILE=${OBLAST_TOPICS_FILE}`);
 
-  let prevActiveTopics = loadState();
+  let { raions: prevRaions, oblasts: prevOblastsStable } = loadState();
 
   const tick = async () => {
     try {
-      prevActiveTopics = await pollOnce(prevActiveTopics);
-      saveState(prevActiveTopics);
+      const { currentRaions } = await pollOnce(prevRaions, prevOblastsStable);
+      prevRaions = currentRaions;
+      saveState(prevRaions, prevOblastsStable);
     } catch (e) {
       console.error("Poll failed:", e);
     }
