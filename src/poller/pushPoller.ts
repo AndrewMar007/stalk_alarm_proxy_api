@@ -134,8 +134,8 @@ export function startPushPoller() {
 
     const title = "Stalk Alarm";
     const body = isStart
-      ? `Увага! Повітряна тривога в «${name}»! Залишайтесь в укритті!`
-      : `Відбій у «${name}». Будьте обережні!`;
+      ? `Увага! Насувається викид в «${name}»! Пройдіть в найближче укриття!`
+      : `Викид завершився у «${name}». Слідкуйте за подальшими оновленнями!`;
 
     await admin.messaging().send({
       topic,
