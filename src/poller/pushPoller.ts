@@ -45,10 +45,10 @@ export function startPushPoller() {
         if (!name || !topic) continue;
         m.set(name, topic);
       }
-      console.log(`✅ Loaded oblast topics: ${m.size} from ${OBLAST_TOPICS_FILE}`);
+      //console.log(`✅ Loaded oblast topics: ${m.size} from ${OBLAST_TOPICS_FILE}`);
       return m;
     } catch (e) {
-      console.warn(`⚠️ Could not load ${OBLAST_TOPICS_FILE}`, e);
+      //console.warn(`⚠️ Could not load ${OBLAST_TOPICS_FILE}`, e);
       return new Map();
     }
   }
@@ -103,7 +103,7 @@ export function startPushPoller() {
           oblasts.set(oblastTopic, oblastName);
         } else {
           // якщо десь не збіглась назва — побачиш це в логах
-          console.log(`[OBLAST MAP MISS] "${oblastName}" has no topic in ${OBLAST_TOPICS_FILE}`);
+          //console.log(`[OBLAST MAP MISS] "${oblastName}" has no topic in ${OBLAST_TOPICS_FILE}`);
         }
       }
 
@@ -150,7 +150,7 @@ export function startPushPoller() {
       android: { priority: "high" },
     });
 
-    console.log(`[FCM SEND] type=${type} level=${level} topic=${topic} name="${name}"`);
+   // console.log(`[FCM SEND] type=${type} level=${level} topic=${topic} name="${name}"`);
   }
 
   /* ================= POLL ================= */
