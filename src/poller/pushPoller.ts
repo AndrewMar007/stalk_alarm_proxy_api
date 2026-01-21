@@ -4,10 +4,35 @@ import fs from "node:fs";
 import path from "node:path";
 
 type TopicNameMap = Map<string, string>; // topic -> name
-type State = { raions: Record<string, string>; oblasts: Record<string, string> };
+type AlarmType = "ALARM_START" | "ALARM_END";
+
+type State = {
+  raions: Record<string, string>;
+  oblasts: Record<string, string>;
+  hromadas: Record<string, string>;
+};
 
 type OblastTopicRow = { name: string; topic: string };
-type AlarmType = "ALARM_START" | "ALARM_END";
+
+// ✅ ПІДТРИМУЄМО ОБИДВА ФОРМАТИ ФАЙЛУ ГРОМАД:
+//
+// A) { "uid":"UA...", "title":"...", "raionUid":"raion_135" }
+// B) { "uid":"UA...", "name":"...", "raion_uid":"raion_107", "topic":"hromada_UA..." }
+type HromadaRowAny = {
+  uid?: string;
+  title?: string;
+  name?: string;
+  raionUid?: string;
+  raion_uid?: string;
+  topic?: string;
+};
+
+type HromadaIndexed = {
+  uid: string;       // UA...
+  name: string;      // title/name
+  raionUid: string;  // raion_###
+  topic: string;     // hromada_UA...
+};
 
 export function startPushPoller() {
   const SERVICE_ACCOUNT_PATH =
@@ -26,9 +51,18 @@ export function startPushPoller() {
     process.env.OBLAST_END_CONFIRM_TICKS || 2
   );
 
+  // ✅ антифліккер END громад: 2 тики = ~30с
+  const HROMADA_END_CONFIRM_TICKS = Number(
+    process.env.HROMADA_END_CONFIRM_TICKS || 2
+  );
+
   // ✅ файл-мапа "назва області" -> "oblast_XX"
   const OBLAST_TOPICS_FILE =
     process.env.OBLAST_TOPICS_FILE || "./oblast_uid_map.json";
+
+  // ✅ файл зі списком громад
+  const HROMADAS_MAP_FILE =
+    process.env.HROMADAS_MAP_FILE || "./hromada_uid_map.json";
 
   /* ================= OBLAST TOPICS MAP ================= */
 
@@ -45,43 +79,104 @@ export function startPushPoller() {
         if (!name || !topic) continue;
         m.set(name, topic);
       }
-      //console.log(`✅ Loaded oblast topics: ${m.size} from ${OBLAST_TOPICS_FILE}`);
       return m;
-    } catch (e) {
-      //console.warn(`⚠️ Could not load ${OBLAST_TOPICS_FILE}`, e);
+    } catch {
       return new Map();
     }
   }
 
   const oblastNameToTopic = loadOblastNameToTopic();
 
+  /* ================= HROMADAS MAP (raion -> hromadas[]) ================= */
+
+  function normalizeHromadaRow(r: HromadaRowAny): HromadaIndexed | null {
+    const uid = (r?.uid ?? "").toString().trim();
+    if (!uid) return null;
+
+    const name =
+      (r?.title ?? r?.name ?? "").toString().trim(); // <-- головне: title OR name
+    const raionUid =
+      (r?.raionUid ?? r?.raion_uid ?? "").toString().trim(); // <-- raionUid OR raion_uid
+
+    if (!name || !raionUid) return null;
+
+    const topicRaw = (r?.topic ?? "").toString().trim();
+    const topic = topicRaw
+      ? topicRaw
+      : uid.startsWith("hromada_")
+        ? uid
+        : `hromada_${uid}`;
+
+    return { uid, name, raionUid, topic };
+  }
+
+  function loadRaionToHromadas(): Map<string, HromadaIndexed[]> {
+    try {
+      const raw = JSON.parse(
+        fs.readFileSync(HROMADAS_MAP_FILE, "utf8")
+      ) as HromadaRowAny[];
+
+      const m = new Map<string, HromadaIndexed[]>();
+      let ok = 0;
+
+      for (const row of raw) {
+        const h = normalizeHromadaRow(row);
+        if (!h) continue;
+
+        ok++;
+        if (!m.has(h.raionUid)) m.set(h.raionUid, []);
+        m.get(h.raionUid)!.push(h);
+      }
+
+      console.log(`✅ Loaded hromadas: ${ok} from ${HROMADAS_MAP_FILE}`);
+      return m;
+    } catch {
+      console.log(
+        `⚠️ Could not load ${HROMADAS_MAP_FILE}. Hromada fanout disabled.`
+      );
+      return new Map();
+    }
+  }
+
+  const raionToHromadas = loadRaionToHromadas();
+
   /* ================= STATE ================= */
 
-  function loadState(): { raions: TopicNameMap; oblasts: TopicNameMap } {
+  function loadState(): {
+    raions: TopicNameMap;
+    oblasts: TopicNameMap;
+    hromadas: TopicNameMap;
+  } {
     try {
       const raw = JSON.parse(fs.readFileSync(STATE_FILE, "utf8")) as State;
       return {
         raions: new Map(Object.entries(raw?.raions ?? {})),
         oblasts: new Map(Object.entries(raw?.oblasts ?? {})),
+        hromadas: new Map(Object.entries(raw?.hromadas ?? {})),
       };
     } catch {
-      return { raions: new Map(), oblasts: new Map() };
+      return { raions: new Map(), oblasts: new Map(), hromadas: new Map() };
     }
   }
 
-  function saveState(raions: TopicNameMap, oblasts: TopicNameMap) {
+  function saveState(
+    raions: TopicNameMap,
+    oblasts: TopicNameMap,
+    hromadas: TopicNameMap
+  ) {
     const obj: State = {
       raions: Object.fromEntries(raions),
       oblasts: Object.fromEntries(oblasts),
+      hromadas: Object.fromEntries(hromadas),
     };
     fs.writeFileSync(STATE_FILE, JSON.stringify(obj, null, 2), "utf8");
   }
 
-  /* ================= EXTRACT ================= */
+  /* ================= EXTRACT (from API) ================= */
 
   function extractActiveTopics(payload: any): {
-    raions: TopicNameMap;   // topic -> name
-    oblasts: TopicNameMap;  // topic -> name
+    raions: TopicNameMap; // topic -> name
+    oblasts: TopicNameMap; // topic -> name
   } {
     const alerts = payload?.alerts ?? payload;
 
@@ -95,20 +190,15 @@ export function startPushPoller() {
       if (a?.finished_at != null) continue;
 
       // ===== OBLAST =====
-      // область активна, якщо є хоч 1 алерт у цій області (будь-який location_type)
       const oblastName = (a?.location_oblast ?? "").toString().trim();
       if (oblastName) {
         const oblastTopic = oblastNameToTopic.get(oblastName);
         if (oblastTopic) {
           oblasts.set(oblastTopic, oblastName);
-        } else {
-          // якщо десь не збіглась назва — побачиш це в логах
-          //console.log(`[OBLAST MAP MISS] "${oblastName}" has no topic in ${OBLAST_TOPICS_FILE}`);
         }
       }
 
       // ===== RAION =====
-      // район активний тільки якщо type === raion
       if (a?.location_type === "raion") {
         const raionUid = (a?.location_uid ?? "").toString().trim();
         const raionName = (a?.location_title ?? "").toString().trim();
@@ -122,11 +212,30 @@ export function startPushPoller() {
     return { raions, oblasts };
   }
 
+  /* ================= HROMADAS DERIVED FROM RAIONS ================= */
+
+  function deriveActiveHromadasFromActiveRaions(
+    activeRaions: TopicNameMap
+  ): TopicNameMap {
+    const h = new Map<string, string>();
+
+    if (raionToHromadas.size === 0) return h;
+
+    for (const [raionTopic] of activeRaions) {
+      const list = raionToHromadas.get(raionTopic) ?? [];
+      for (const row of list) {
+        // ✅ беремо topic + name з файлу (а не конструюємо)
+        h.set(row.topic, row.name);
+      }
+    }
+    return h;
+  }
+
   /* ================= PUSH ================= */
 
   async function sendToTopic(
-    level: "raion" | "oblast",
-    topic: string, // ✅ СЮДИ ПРИХОДИТЬ ВЖЕ ГОТОВИЙ topic: "oblast_14" або "raion_74"
+    level: "raion" | "oblast" | "hromada",
+    topic: string,
     name: string,
     type: AlarmType
   ) {
@@ -142,7 +251,7 @@ export function startPushPoller() {
       data: {
         type,
         level,
-        uid: topic, // щоб у Flutter було видно як ти підписувався
+        uid: topic,
         name,
         title,
         body,
@@ -150,52 +259,59 @@ export function startPushPoller() {
       android: { priority: "high" },
     });
 
-   // console.log(`[FCM SEND] type=${type} level=${level} topic=${topic} name="${name}"`);
+    console.log(
+      `[FCM SEND] type=${type} level=${level} topic=${topic} name="${name}"`
+    );
   }
 
   /* ================= POLL ================= */
 
-  // ✅ streak відсутності області (антифліккер END)
   const oblastMissStreak = new Map<string, number>();
+  const hromadaMissStreak = new Map<string, number>();
 
-  async function pollOnce(prevRaions: TopicNameMap, prevOblastsStable: TopicNameMap) {
-    const res = await fetch(PROXY_URL, { headers: { Accept: "application/json" } });
+  async function pollOnce(
+    prevRaions: TopicNameMap,
+    prevOblastsStable: TopicNameMap,
+    prevHromadasStable: TopicNameMap
+  ) {
+    const res = await fetch(PROXY_URL, {
+      headers: { Accept: "application/json" },
+    });
     if (!res.ok) throw new Error(`Upstream error: ${res.status} ${res.statusText}`);
 
     const payload = await res.json();
-    const { raions: currentRaions, oblasts: oblastsInstant } = extractActiveTopics(payload);
 
-    /* ===== RAIONS (без debounce) ===== */
+    const { raions: currentRaions, oblasts: oblastsInstant } =
+      extractActiveTopics(payload);
+
+    const hromadasInstant = deriveActiveHromadasFromActiveRaions(currentRaions);
+
+    /* ===== RAIONS ===== */
 
     for (const [topic, name] of currentRaions) {
       if (!prevRaions.has(topic)) {
-        const t: AlarmType = "ALARM_START";
-        await sendToTopic("raion", topic, name, t);
+        await sendToTopic("raion", topic, name, "ALARM_START");
       }
     }
     for (const [topic, name] of prevRaions) {
       if (!currentRaions.has(topic)) {
-        const t: AlarmType = "ALARM_END";
-        await sendToTopic("raion", topic, name, t);
+        await sendToTopic("raion", topic, name, "ALARM_END");
       }
     }
 
     /* ===== OBLASTS (stable + debounce END) ===== */
 
-    // START
     for (const [topic, name] of oblastsInstant) {
       oblastMissStreak.delete(topic);
 
       if (!prevOblastsStable.has(topic)) {
         prevOblastsStable.set(topic, name);
-        const t: AlarmType = "ALARM_START";
-        await sendToTopic("oblast", topic, name, t);
+        await sendToTopic("oblast", topic, name, "ALARM_START");
       } else {
         prevOblastsStable.set(topic, name);
       }
     }
 
-    // END лише після N тика(ів) відсутності
     for (const [topic, name] of Array.from(prevOblastsStable.entries())) {
       if (oblastsInstant.has(topic)) continue;
 
@@ -203,10 +319,35 @@ export function startPushPoller() {
       oblastMissStreak.set(topic, streak);
 
       if (streak >= OBLAST_END_CONFIRM_TICKS) {
-        const t: AlarmType = "ALARM_END";
-        await sendToTopic("oblast", topic, name, t);
+        await sendToTopic("oblast", topic, name, "ALARM_END");
         prevOblastsStable.delete(topic);
         oblastMissStreak.delete(topic);
+      }
+    }
+
+    /* ===== HROMADAS (stable + debounce END) ===== */
+
+    for (const [topic, name] of hromadasInstant) {
+      hromadaMissStreak.delete(topic);
+
+      if (!prevHromadasStable.has(topic)) {
+        prevHromadasStable.set(topic, name);
+        await sendToTopic("hromada", topic, name, "ALARM_START");
+      } else {
+        prevHromadasStable.set(topic, name);
+      }
+    }
+
+    for (const [topic, name] of Array.from(prevHromadasStable.entries())) {
+      if (hromadasInstant.has(topic)) continue;
+
+      const streak = (hromadaMissStreak.get(topic) ?? 0) + 1;
+      hromadaMissStreak.set(topic, streak);
+
+      if (streak >= HROMADA_END_CONFIRM_TICKS) {
+        await sendToTopic("hromada", topic, name, "ALARM_END");
+        prevHromadasStable.delete(topic);
+        hromadaMissStreak.delete(topic);
       }
     }
 
@@ -216,7 +357,9 @@ export function startPushPoller() {
   /* ================= INIT ================= */
 
   if (admin.apps.length === 0) {
-    const sa = JSON.parse(fs.readFileSync(path.resolve(SERVICE_ACCOUNT_PATH), "utf8"));
+    const sa = JSON.parse(
+      fs.readFileSync(path.resolve(SERVICE_ACCOUNT_PATH), "utf8")
+    );
     admin.initializeApp({ credential: admin.credential.cert(sa) });
   }
 
@@ -225,15 +368,25 @@ export function startPushPoller() {
   console.log(`PROXY_URL=${PROXY_URL}`);
   console.log(`STATE_FILE=${STATE_FILE}`);
   console.log(`OBLAST_END_CONFIRM_TICKS=${OBLAST_END_CONFIRM_TICKS}`);
+  console.log(`HROMADA_END_CONFIRM_TICKS=${HROMADA_END_CONFIRM_TICKS}`);
   console.log(`OBLAST_TOPICS_FILE=${OBLAST_TOPICS_FILE}`);
+  console.log(`HROMADAS_MAP_FILE=${HROMADAS_MAP_FILE}`);
 
-  let { raions: prevRaions, oblasts: prevOblastsStable } = loadState();
+  let {
+    raions: prevRaions,
+    oblasts: prevOblastsStable,
+    hromadas: prevHromadasStable,
+  } = loadState();
 
   const tick = async () => {
     try {
-      const { currentRaions } = await pollOnce(prevRaions, prevOblastsStable);
+      const { currentRaions } = await pollOnce(
+        prevRaions,
+        prevOblastsStable,
+        prevHromadasStable
+      );
       prevRaions = currentRaions;
-      saveState(prevRaions, prevOblastsStable);
+      saveState(prevRaions, prevOblastsStable, prevHromadasStable);
     } catch (e) {
       console.error("Poll failed:", e);
     }

@@ -175,3 +175,27 @@ app.get("/internal/debug/state", (_req, res) => {
     res.status(404).json({ error: "state file not found", path: STATE_FILE });
   }
 });
+
+app.get("/internal/test-hromada/:uid", async (req, res) => {
+  try {
+    const uid = String(req.params.uid).trim(); // наприклад: UA71020010000037786
+    const topic = `hromada_${uid}`;
+
+    const msgId = await admin.messaging().send({
+      topic,
+      data: {
+        type: "TEST",
+        level: "hromada",
+        uid: topic,
+        name: "TEST HROMADA",
+        title: "Stalk Alarm",
+        body: `TEST to ${topic}`,
+      },
+      android: { priority: "high" },
+    });
+
+    res.json({ ok: true, msgId, topic });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: String(e?.message ?? e) });
+  }
+});
