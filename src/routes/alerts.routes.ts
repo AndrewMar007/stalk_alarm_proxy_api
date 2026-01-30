@@ -25,26 +25,27 @@ function requireDeviceId(req: Request, res: Response, next: NextFunction) {
 /**
  * ⏱️ ЛІМІТ: 2 рази / хв НА ДЕВАЙС
  */
+const HISTORY_GAP_MS = 45_000;
+
 const historyLimiter = rateLimit({
-  windowMs: 60_000,
-  limit: Number(process.env.HISTORY_LIMIT_PER_MINUTE || 2),
+  windowMs: HISTORY_GAP_MS,
+  limit: 1,
   standardHeaders: true,
   legacyHeaders: false,
 
-  keyGenerator: (req) => {
-    // тут ми вже гарантуємо, що deviceId існує
-    return `dev:${req.get("X-Device-Id")}`;
-  },
+  keyGenerator: (req) => `dev:${req.get("X-Device-Id")}`,
 
   handler: (_req, res) => {
+    res.setHeader("Retry-After", "45");
     res.status(429).json({
       error:
-        "Перевищено ліміт запитів до історії (2/хв). Зачекайте кілька хвилин і спробуйте ще раз.",
+        "Перевищено ліміт запитів до історії. Спробуйте знову через 45 секунд.",
       code: "HISTORY_RATE_LIMIT",
-      retryAfterSec: 120,
+      retryAfterSec: 45,
     });
   },
 });
+
 
 router.get("/alerts/active", async (_req, res, next) => {
   try {
