@@ -241,23 +241,24 @@ export function startPushPoller() {
   ) {
     const isStart = type === "ALARM_START";
 
-    const title = "Stalk Alarm";
-    const body = isStart
-      ? `Увага! Насувається викид в «${name}»! Пройдіть в найближче укриття!`
-      : `Викид завершився у «${name}». Слідкуйте за подальшими оновленнями!`;
-
     await admin.messaging().send({
       topic,
       data: {
         type,
         level,
+        // ✅ лишаємо uid як topic (клієнт нормалізує hromada_)
         uid: topic,
+
+        // ✅ можна взагалі не слати name, але хай буде для логів
         name,
-        title,
-        body,
+
+        // ✅ НЕ шлемо title/body, щоб клієнт робив локалізацію завжди
+        // title: "",
+        // body: "",
       },
       android: { priority: "high" },
     });
+
 
     console.log(
       `[FCM SEND] type=${type} level=${level} topic=${topic} name="${name}"`
