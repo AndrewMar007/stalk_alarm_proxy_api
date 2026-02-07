@@ -241,23 +241,32 @@ export function startPushPoller() {
   ) {
     const isStart = type === "ALARM_START";
 
+    const TTL_SECONDS = 5 * 60; // ✅ 5 хвилин
+
     await admin.messaging().send({
       topic,
       data: {
         type,
         level,
-        // ✅ лишаємо uid як topic (клієнт нормалізує hromada_)
-        uid: topic,
-
-        // ✅ можна взагалі не слати name, але хай буде для логів
-        name,
-
-        // ✅ НЕ шлемо title/body, щоб клієнт робив локалізацію завжди
-        // title: "",
-        // body: "",
+        uid: topic,     // як і було
+        name,           // можеш прибрати, якщо не треба (див. нижче)
+        sentAtMs: Date.now().toString(), // ✅ опційно для дебагу/фільтрації
       },
-      android: { priority: "high" },
+
+      android: {
+        priority: "high",
+        ttl: TTL_SECONDS * 1000,          // ✅ Android TTL
+        collapseKey: `alarm_${topic}`,    // ✅ не накопичувати офлайн
+      },
+
+      apns: {
+        headers: {
+          "apns-expiration": `${Math.floor(Date.now() / 1000) + TTL_SECONDS}`,
+          "apns-collapse-id": `alarm_${topic}`, // ✅ iOS collapse
+        },
+      },
     });
+
 
 
     console.log(
