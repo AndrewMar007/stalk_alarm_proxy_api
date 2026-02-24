@@ -14,25 +14,25 @@ type UpstreamResponse = {
   [k: string]: unknown;
 };
 
-const TTL = Number(process.env.HISTORY_CACHE_TTL_MS || 60000); // 60s => <= 1/min
+const TTL = Number(process.env.HISTORY_CACHE_TTL_MS || 60000); // 60s
 const DEFAULT_DAYS = Number(process.env.HISTORY_DAYS_DEFAULT || 3);
 
+// ✅ ВАЖЛИВО: cache key БЕЗ days (days тільки для фільтрації)
 const cache = new Map<
   string,
-  { data: unknown; lastFetch: number; inFlight: Promise<unknown> | null }
+  { raw: UpstreamResponse | null; lastFetch: number; inFlight: Promise<UpstreamResponse> | null }
 >();
 
 function clampDays(days: number) {
   if (!Number.isFinite(days)) return DEFAULT_DAYS;
-  return Math.min(Math.max(Math.floor(days), 1), 7); // 1..7
+  // для історії показуємо 1..7, але для ризику хочеш "місяць" -> дозволимо до 31
+  return Math.min(Math.max(Math.floor(days), 1), 31);
 }
 
 function safeParseTs(a: UpstreamAlert): number {
-  // 1) started_at (основне)
   const s = Date.parse(a.started_at);
   if (Number.isFinite(s)) return s;
 
-  // 2) updated_at (fallback)
   if (a.updated_at) {
     const u = Date.parse(a.updated_at);
     if (Number.isFinite(u)) return u;
@@ -49,33 +49,54 @@ function filterLastDays(resp: UpstreamResponse, days: number): UpstreamResponse 
     return t >= cutoff;
   });
 
-  // стабільне сортування: новіші зверху, некоректні (t=-1) підуть вниз
+  // новіші зверху
   filtered.sort((a, b) => safeParseTs(b) - safeParseTs(a));
 
   return { ...resp, alerts: filtered };
 }
 
-export async function getRegionAlertsHistoryCached(uid: string, period: string, days?: number) {
+/**
+ * ✅ Кешуємо "raw" відповідь (без фільтра days), а фільтруємо на виході.
+ * Це гарантує, що history(days=3) і risk(days=30) НЕ викличуть upstream двічі.
+ */
+export async function getRegionAlertsHistoryCached(
+  uid: string,
+  period: string,
+  days?: number
+) {
   const d = clampDays(days ?? DEFAULT_DAYS);
-  const key = `${uid}::${period}::${d}`;
+  const key = `${uid}::${period}`;
 
   const now = Date.now();
-  const entry = cache.get(key) ?? { data: null, lastFetch: 0, inFlight: null };
+  const entry =
+    cache.get(key) ?? { raw: null, lastFetch: 0, inFlight: null };
 
-  if (entry.data !== null && now - entry.lastFetch < TTL) {
-    return entry.data;
+  // raw кеш актуальний
+  if (entry.raw !== null && now - entry.lastFetch < TTL) {
+    return filterLastDays(entry.raw, d);
   }
 
-  if (entry.inFlight) return entry.inFlight;
+  // вже йде fetch — чекаємо
+  if (entry.inFlight) {
+    const raw = await entry.inFlight;
+    return filterLastDays(raw, d);
+  }
 
+  // робимо новий upstream fetch
   entry.inFlight = (async () => {
     try {
-      const raw = (await fetchRegionAlertsHistoryFromUpstream(uid, period)) as UpstreamResponse;
-      const pruned = filterLastDays(raw, d);
+      const raw = (await fetchRegionAlertsHistoryFromUpstream(
+        uid,
+        period
+      )) as UpstreamResponse;
 
-      entry.data = pruned;
+      // нормалізуємо масив alerts
+      const alerts = Array.isArray(raw?.alerts) ? raw.alerts : [];
+      const normalized: UpstreamResponse = { ...raw, alerts };
+
+      entry.raw = normalized;
       entry.lastFetch = Date.now();
-      return pruned;
+      return normalized;
     } finally {
       entry.inFlight = null;
       cache.set(key, entry);
@@ -83,5 +104,7 @@ export async function getRegionAlertsHistoryCached(uid: string, period: string, 
   })();
 
   cache.set(key, entry);
-  return entry.inFlight;
+
+  const raw = await entry.inFlight;
+  return filterLastDays(raw, d);
 }
