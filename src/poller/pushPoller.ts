@@ -269,9 +269,9 @@ export function startPushPoller() {
 
 
 
-    console.log(
-      `[FCM SEND] type=${type} level=${level} topic=${topic} name="${name}"`
-    );
+    // console.log(
+    //   `[FCM SEND] type=${type} level=${level} topic=${topic} name="${name}"`
+    // );
   }
 
   /* ================= POLL ================= */
