@@ -10,8 +10,10 @@ import type { Request, Response, NextFunction } from "express";
 import { webHistoryLimiter } from "../middlewares/webRateLimit.middleware.js";
 import { computeOblastForecast } from "../services/forecast.service.js";
 
-import { forecastLimiter, webForecastLimiter } 
-  from "../middlewares/forecastRateLimit.middleware.js";
+import {
+  forecastLimiter,
+  webForecastLimiter,
+} from "../middlewares/forecastRateLimit.middleware.js";
 
 const router = Router();
 
@@ -64,7 +66,7 @@ const historyLimiter = rateLimit({
 
 /* ===================== /api + /internal routes ===================== */
 
-// ✅ ACTIVE (як було)
+// ACTIVE
 router.get("/alerts/active", async (_req, res, next) => {
   try {
     const data = await getActiveAlertsCached();
@@ -75,9 +77,10 @@ router.get("/alerts/active", async (_req, res, next) => {
 });
 
 /**
- * ✅ HISTORY + RISK (1 запит)
+ * HISTORY + RISK
  * - alerts: за 3 дні (UI)
  * - risk: за місяць (30 днів) з entry.monthAlerts
+ * - updatedAt / historyUpdatedAt: час останнього оновлення кешу області
  */
 router.get(
   "/alerts/history/:uid",
@@ -95,7 +98,6 @@ router.get(
       const entry = getOblastCacheEntry(uid);
       if (!entry) return warmupMiss(res, uid);
 
-      // active state (з твого cached active, не upstream history)
       const activePayload: any = await getActiveAlertsCached();
       const activeAlerts = Array.isArray(activePayload?.alerts)
         ? activePayload.alerts
@@ -106,7 +108,9 @@ router.get(
       const isActiveNow = activeAlerts.some(
         (a: any) =>
           a?.finished_at == null &&
-          String(a?.location_oblast_uid ?? a?.location_uid ?? "").trim() === uid
+          String(
+            a?.location_oblast_uid ?? a?.location_uid ?? "",
+          ).trim() === uid,
       );
 
       const monthAlerts = Array.isArray(entry.monthAlerts)
@@ -116,17 +120,22 @@ router.get(
       const risk = computeOblastRisk({
         oblastUid: uid,
         oblastName: entry.oblastName || `Oblast ${uid}`,
-        historyAlerts: monthAlerts, // ✅ місяць
+        historyAlerts: monthAlerts,
         isActiveNow,
       });
 
-      // ✅ 1 відповідь: історія + ризик
       res.json({
         ok: true,
         cached: true,
         oblastUid: uid,
         oblastName: entry.oblastName || risk.oblastName,
+
+        // час останнього оновлення кешу області
         updatedAt: entry.updatedAt,
+
+        // окремо для історії, якщо поле вже є в cache entry
+        historyUpdatedAt:
+          (entry as any).historyUpdatedAt ?? entry.updatedAt,
 
         // UI history
         days: 3,
@@ -136,23 +145,23 @@ router.get(
         // risk block
         riskDays: 30,
         isActiveNow,
-        risk, // <- тут OblastRiskResponse-подібний обʼєкт
+        risk,
       });
     } catch (e) {
       next(e);
     }
-  }
+  },
 );
 
 export default router;
 
 /* ============================================================
- * ✅ WEB ROUTER (для /web) — теж HISTORY + RISK в одному запиті
+ * WEB ROUTER
  * ============================================================ */
 
 export const webRouter = Router();
 
-// ✅ ACTIVE (як було)
+// ACTIVE
 webRouter.get("/alerts/active", async (_req, res, next) => {
   try {
     const data = await getActiveAlertsCached();
@@ -163,8 +172,7 @@ webRouter.get("/alerts/active", async (_req, res, next) => {
 });
 
 /**
- * ✅ WEB HISTORY + RISK (1 запит)
- * Ліміт на web лишається через webHistoryLimiter (у тебе там 10 секунд / IP або як налаштовано).
+ * WEB HISTORY + RISK
  */
 webRouter.get(
   "/alerts/history/:uid",
@@ -191,7 +199,9 @@ webRouter.get(
       const isActiveNow = activeAlerts.some(
         (a: any) =>
           a?.finished_at == null &&
-          String(a?.location_oblast_uid ?? a?.location_uid ?? "").trim() === uid
+          String(
+            a?.location_oblast_uid ?? a?.location_uid ?? "",
+          ).trim() === uid,
       );
 
       const monthAlerts = Array.isArray(entry.monthAlerts)
@@ -210,7 +220,13 @@ webRouter.get(
         cached: true,
         oblastUid: uid,
         oblastName: entry.oblastName || risk.oblastName,
+
+        // час останнього оновлення кешу області
         updatedAt: entry.updatedAt,
+
+        // окремо для історії, якщо поле вже є в cache entry
+        historyUpdatedAt:
+          (entry as any).historyUpdatedAt ?? entry.updatedAt,
 
         days: 3,
         period: entry.period,
@@ -223,20 +239,21 @@ webRouter.get(
     } catch (e) {
       next(e);
     }
-  }
+  },
 );
-
-
-// ...
 
 // /api/alerts/forecast/:uid
 router.get(
   "/alerts/forecast/:uid",
   requireDeviceId,
-  forecastLimiter, // або твій forecastLimiter на 5 секунд
+  forecastLimiter,
   async (req, res, next) => {
     const uid = asUid(req.params.uid);
-    if (!uid) return res.status(400).json({ error: "uid is required", code: "UID_REQUIRED" });
+    if (!uid) {
+      return res
+        .status(400)
+        .json({ error: "uid is required", code: "UID_REQUIRED" });
+    }
 
     try {
       const entry = getOblastCacheEntry(uid);
@@ -255,21 +272,20 @@ router.get(
     } catch (e) {
       next(e);
     }
-  }
+  },
 );
 
-// WEB:
-/**
- * ✅ WEB FORECAST (separate endpoint)
- * /web/alerts/forecast/:uid
- */
 // /web/alerts/forecast/:uid
 webRouter.get(
   "/alerts/forecast/:uid",
-  webForecastLimiter, // 5 секунд / IP якщо ти вже змінив windowMs
+  webForecastLimiter,
   async (req, res, next) => {
     const uid = asUid(req.params.uid);
-    if (!uid) return res.status(400).json({ error: "uid is required", code: "UID_REQUIRED" });
+    if (!uid) {
+      return res
+        .status(400)
+        .json({ error: "uid is required", code: "UID_REQUIRED" });
+    }
 
     try {
       const entry = getOblastCacheEntry(uid);
@@ -288,5 +304,5 @@ webRouter.get(
     } catch (e) {
       next(e);
     }
-  }
+  },
 );
