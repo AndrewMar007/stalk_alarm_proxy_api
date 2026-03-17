@@ -35,7 +35,7 @@ export const webSpeedLimiter = slowDown({
  * ⏱️ WEB: 1 раз / 10 секунд на IP
  */
 export const webHistoryLimiter = rateLimit({
-  windowMs: 10_000,
+  windowMs: 5_000,
   limit: 1,
   standardHeaders: true,
   legacyHeaders: false,
@@ -48,9 +48,9 @@ export const webHistoryLimiter = rateLimit({
   handler: (_req, res) => {
     res.setHeader("Retry-After", "10");
     res.status(429).json({
-      error: "Зачекайте 10 секунд перед наступним запитом.",
+      error: "Зачекайте 5 секунд перед наступним запитом.",
       code: "WEB_HISTORY_RATE_LIMIT",
-      retryAfterSec: 10,
+      retryAfterSec: 5,
     });
   },
 });

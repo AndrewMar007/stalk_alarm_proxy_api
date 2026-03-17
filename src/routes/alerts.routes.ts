@@ -8,6 +8,10 @@ import { getOblastCacheEntry } from "../services/oblastWarmup.service.js";
 
 import type { Request, Response, NextFunction } from "express";
 import { webHistoryLimiter } from "../middlewares/webRateLimit.middleware.js";
+import { computeOblastForecast } from "../services/forecast.service.js";
+
+import { forecastLimiter, webForecastLimiter } 
+  from "../middlewares/forecastRateLimit.middleware.js";
 
 const router = Router();
 
@@ -34,13 +38,13 @@ function warmupMiss(res: Response, uid: string) {
     error: "Cache is warming up for this oblast. Try again soon.",
     code: "CACHE_WARMING_UP",
     oblastUid: uid,
-    retryAfterSec: 10,
+    retryAfterSec: 5,
   });
 }
 
 /* ===================== rate limit (mobile history) ===================== */
 
-const HISTORY_GAP_MS = 10_000;
+const HISTORY_GAP_MS = 5_000;
 
 const historyLimiter = rateLimit({
   windowMs: HISTORY_GAP_MS,
@@ -51,9 +55,9 @@ const historyLimiter = rateLimit({
   handler: (_req, res) => {
     res.setHeader("Retry-After", "10");
     res.status(429).json({
-      error: "Зачекайте 10 секунд перед наступним запитом.",
+      error: "Зачекайте 5 секунд перед наступним запитом.",
       code: "HISTORY_RATE_LIMIT",
-      retryAfterSec: 10,
+      retryAfterSec: 5,
     });
   },
 });
@@ -216,6 +220,71 @@ webRouter.get(
         isActiveNow,
         risk,
       });
+    } catch (e) {
+      next(e);
+    }
+  }
+);
+
+
+// ...
+
+// /api/alerts/forecast/:uid
+router.get(
+  "/alerts/forecast/:uid",
+  requireDeviceId,
+  forecastLimiter, // або твій forecastLimiter на 5 секунд
+  async (req, res, next) => {
+    const uid = asUid(req.params.uid);
+    if (!uid) return res.status(400).json({ error: "uid is required", code: "UID_REQUIRED" });
+
+    try {
+      const entry = getOblastCacheEntry(uid);
+      if (!entry) return warmupMiss(res, uid);
+
+      const forecast = computeOblastForecast({
+        oblastUid: uid,
+        oblastName: entry.oblastName || `Oblast ${uid}`,
+        updatedAt: entry.updatedAt,
+        monthAlerts: Array.isArray(entry.monthAlerts) ? entry.monthAlerts : [],
+        tz: "Europe/Kyiv",
+        daysBack: 30,
+      });
+
+      res.json(forecast);
+    } catch (e) {
+      next(e);
+    }
+  }
+);
+
+// WEB:
+/**
+ * ✅ WEB FORECAST (separate endpoint)
+ * /web/alerts/forecast/:uid
+ */
+// /web/alerts/forecast/:uid
+webRouter.get(
+  "/alerts/forecast/:uid",
+  webForecastLimiter, // 5 секунд / IP якщо ти вже змінив windowMs
+  async (req, res, next) => {
+    const uid = asUid(req.params.uid);
+    if (!uid) return res.status(400).json({ error: "uid is required", code: "UID_REQUIRED" });
+
+    try {
+      const entry = getOblastCacheEntry(uid);
+      if (!entry) return warmupMiss(res, uid);
+
+      const forecast = computeOblastForecast({
+        oblastUid: uid,
+        oblastName: entry.oblastName || `Oblast ${uid}`,
+        updatedAt: entry.updatedAt,
+        monthAlerts: Array.isArray(entry.monthAlerts) ? entry.monthAlerts : [],
+        tz: "Europe/Kyiv",
+        daysBack: 30,
+      });
+
+      res.json(forecast);
     } catch (e) {
       next(e);
     }
