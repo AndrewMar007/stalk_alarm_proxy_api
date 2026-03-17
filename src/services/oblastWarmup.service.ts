@@ -140,9 +140,9 @@ export function startOblastWarmup(args: {
         cache.set(uid, entry);
         safeWriteFile();
 
-        console.log(
-          `✅ Warmed oblast=${uid} name="${oblastName}" monthAlerts=${monthAlerts.length} ui3d=${history3d.length}`
-        );
+        // console.log(
+        //   `✅ Warmed oblast=${uid} name="${oblastName}" monthAlerts=${monthAlerts.length} ui3d=${history3d.length}`
+        // );
       } catch (e) {
         console.log(`⚠️ Warmup failed oblast=${uid}:`, e);
       }
